@@ -1,0 +1,6 @@
+# Set execution policy
+Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Scope CurrentUser
+
+# Unblock script files
+Unblock-File -Path .\build-image.ps1
+Unblock-File -Path .\push-image.ps1
