@@ -1,5 +1,4 @@
 # syntax=docker/dockerfile:1
-
 FROM ubuntu:22.04
 
 # ================================================================
@@ -20,8 +19,6 @@ ARG RDS_ENDPOINT
 ARG RDS_DB_NAME
 ARG RDS_DB_USERNAME
 ARG DOMAIN_NAME
-
-# Newly added build args
 ARG PROJECT_NAME=nest
 ARG ENVIRONMENT=dev
 ARG RECORD_NAME=www
@@ -29,28 +26,21 @@ ARG RECORD_NAME=www
 # ================================================================
 # Environment variables
 # ================================================================
-ENV GITHUB_USERNAME=${GITHUB_USERNAME}
-ENV REPOSITORY_NAME=${REPOSITORY_NAME}
-ENV APPLICATION_CODE_FILE_NAME=${APPLICATION_CODE_FILE_NAME}
-ENV RDS_ENDPOINT=${RDS_ENDPOINT}
-ENV RDS_DB_NAME=${RDS_DB_NAME}
-ENV RDS_DB_USERNAME=${RDS_DB_USERNAME}
-ENV DOMAIN_NAME=${DOMAIN_NAME}
-
-ENV PROJECT_NAME=${PROJECT_NAME}
-ENV ENVIRONMENT=${ENVIRONMENT}ENV RECORD_NAME=${RECORD_NAME}
+ENV GITHUB_USERNAME=${GITHUB_USERNAME} \
+    REPOSITORY_NAME=${REPOSITORY_NAME} \
+    APPLICATION_CODE_FILE_NAME=${APPLICATION_CODE_FILE_NAME} \
+    RDS_ENDPOINT=${RDS_ENDPOINT} \
+    RDS_DB_NAME=${RDS_DB_NAME} \
+    RDS_DB_USERNAME=${RDS_DB_USERNAME} \
+    DOMAIN_NAME=${DOMAIN_NAME} \
+    PROJECT_NAME=${PROJECT_NAME} \
+    ENVIRONMENT=${ENVIRONMENT} \
+    RECORD_NAME=${RECORD_NAME}
 
 # ================================================================
 # Install dependencies
 # ================================================================
-# Update all packages
-RUN apt update -y
-
-# Install git and unzip
-RUN apt install -y git unzip
-
-# Install Apache, PHP and required extensions
-RUN apt update && apt install -y \
+RUN apt-get update -y && apt-get install -y \
     apache2 \
     php \
     php-cli \
@@ -60,37 +50,36 @@ RUN apt update && apt install -y \
     php-mbstring \
     php-gd \
     php-xml \
-    php-curl
-
-
-# Install Git LFS
-RUN apt-get update && apt-get install -y curl gnupg \
-    && curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | bash \
-    && apt-get install -y git-lfs \
-    && git lfs install \
-    && rm -rf /var/lib/apt/lists/*
-
+    php-curl \
+    git \
+    unzip \
+    curl \
+    gnupg \
+    locales && \
+    # Install Git LFS
+    curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | bash && \
+    apt-get install -y git-lfs && \
+    git lfs install && \
+    # Clean apt cache
+    rm -rf /var/lib/apt/lists/*
 
 # Update PHP settings
 RUN sed -i 's/^memory_limit = .*/memory_limit = 256M/' /etc/php/*/apache2/php.ini && \
     sed -i 's/^max_execution_time = .*/max_execution_time = 300/' /etc/php/*/apache2/php.ini
-# Enable Apache mod_rewrite
+
+# Enable Apache modules and AllowOverride
 RUN a2enmod rewrite && \
-    sed -i '/<Directory \/var\/www\/>/,/<\/Directory>/ s/AllowOverride None/AllowOverride All/' \/etc/apache2/apache2.conf
+    sed -i '/<Directory \/var\/www\/>/,/<\/Directory>/ s/AllowOverride None/AllowOverride All/' /etc/apache2/apache2.conf
+
+# Fix Apache ServerName warning (important for clean logs and stability)
+RUN echo "ServerName localhost" >> /etc/apache2/apache2.conf
 
 # ================================================================
 # Application setup
 # ================================================================
 WORKDIR /var/www/html
 
-# Clean the directory first, then clone
-# RUN --mount=type=secret,id=personal_access_token \
-#    PERSONAL_ACCESS_TOKEN=$(cat /run/secrets/personal_access_token) && \
-#    rm -rf * && \
-#    git clone https://${PERSONAL_ACCESS_TOKEN}@github.com/${GITHUB_USERNAME}/${REPOSITORY_NAME}.git .
-
-# Clean the directory first, then clone private repo securely
-
+# Clone private repo securely using build secrets
 RUN --mount=type=secret,id=personal_access_token \
     PERSONAL_ACCESS_TOKEN=$(cat /run/secrets/personal_access_token) && \
     rm -rf /var/www/html/* && \
@@ -98,10 +87,6 @@ RUN --mount=type=secret,id=personal_access_token \
     git clone https://${GITHUB_USERNAME}:${PERSONAL_ACCESS_TOKEN}@github.com/${GITHUB_USERNAME}/${REPOSITORY_NAME}.git . && \
     git config --global --unset url."https://${PERSONAL_ACCESS_TOKEN}@github.com/".insteadOf
 
-
-    
-
-# Pull LFS files
 RUN git lfs pull
 
 # Extract application code
@@ -110,11 +95,11 @@ RUN unzip ${APPLICATION_CODE_FILE_NAME}.zip && \
     rm -rf ${APPLICATION_CODE_FILE_NAME} ${APPLICATION_CODE_FILE_NAME}.zip
 
 # ================================================================
-# Permissions
+# Permissions (slightly better than 777)
 # ================================================================
-RUN chmod -R 777 /var/www/html && \
-    chmod -R 777 /var/www/html/bootstrap/cache/ && \
-    chmod -R 777 /var/www/html/storage/
+RUN chown -R www-data:www-data /var/www/html && \
+    chmod -R 755 /var/www/html && \
+    chmod -R 777 /var/www/html/bootstrap/cache /var/www/html/storage
 
 # ================================================================
 # Update .env file
@@ -128,22 +113,19 @@ RUN --mount=type=secret,id=rds_db_password \
     sed -i "s|^DB_USERNAME=.*|DB_USERNAME=${RDS_DB_USERNAME}|" .env && \
     sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=${RDS_DB_PASSWORD}|" .env
 
-# ================================================================
-# Replace AppServiceProvider
-# ================================================================
+# Copy custom AppServiceProvider
 COPY AppServiceProvider.php app/Providers/AppServiceProvider.php
 
 # ================================================================
-# Locale + startup
+# Locale + startup script
 # ================================================================
-RUN apt update && apt install -y locales && \
-    locale-gen en_US.UTF-8
+RUN locale-gen en_US.UTF-8
 
 COPY start-services.sh /usr/local/bin/start-services.sh
-
 RUN chmod +x /usr/local/bin/start-services.sh && \
     sed -i 's/\r$//' /usr/local/bin/start-services.sh
 
-EXPOSE 80 3306
+EXPOSE 80
 
+# Use the startup script
 CMD ["/usr/local/bin/start-services.sh"]
